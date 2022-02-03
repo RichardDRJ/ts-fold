@@ -126,6 +126,21 @@
     (array_initializer               . ts-fold-range-seq)
     (comment                         . (ts-fold-range-seq 1 -1))))
 
+(defvar ts-fold-queries-java
+  '((((switch_block) @fold)                    . ts-fold-range-seq)
+    (((block) @fold)                           . ts-fold-range-seq)
+    (((element_value_array_initializer) @fold) . ts-fold-range-seq)
+    (((_ (module_body) @fold) @module)                     . ts-fold-range-seq)
+    (((_ (enum_body) @fold) @enum)                       . ts-fold-range-seq)
+    (((_ (class_body) @fold) @class)                      . ts-fold-range-seq)
+    (((_ (constructor_body) @fold) @constructor)                . ts-fold-range-seq)
+    (((_ (annotation_type_body) @fold) @annotation)            . ts-fold-range-seq)
+    (((_ (interface_body) @fold) @interface)                  . ts-fold-range-seq)
+    (((_ (array_initializer) @fold) @array)               . ts-fold-range-seq)
+    (((import_declaration (_)+)+ @fold)        . (ts-fold-range-seq 6 0))
+    (((comment) @fold)                         . (ts-fold-range-seq 1 -1)))
+  "Rule sets for Java.")
+
 (defun ts-fold-parsers-javascript ()
   "Rule sets for JavaScript."
   '((export_clause   . ts-fold-range-seq)

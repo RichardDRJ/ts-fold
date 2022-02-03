@@ -57,55 +57,46 @@
   :group 'tree-sitter
   :prefix "ts-fold-")
 
-(defvar ts-fold-foldable-node-alist nil
-  "Collect a list of foldable node from variable `ts-fold-range-alist'.
-
-The alist is in form of (major-mode . (foldable-node-type)).")
+(setq ts-fold-range-alist
+  `((java-mode       . ,ts-fold-queries-java)))
 
 (defcustom ts-fold-range-alist
-  `((agda-mode       . ,(ts-fold-parsers-agda))
-    (sh-mode         . ,(ts-fold-parsers-bash))
-    (c-mode          . ,(ts-fold-parsers-c))
-    (c++-mode        . ,(ts-fold-parsers-c++))
-    (csharp-mode     . ,(ts-fold-parsers-csharp))
-    (css-mode        . ,(ts-fold-parsers-css))
-    (ess-r-mode      . ,(ts-fold-parsers-r))
-    (go-mode         . ,(ts-fold-parsers-go))
-    (html-mode       . ,(ts-fold-parsers-html))
-    (java-mode       . ,(ts-fold-parsers-java))
-    (javascript-mode . ,(ts-fold-parsers-javascript))
-    (js-mode         . ,(ts-fold-parsers-javascript))
-    (js2-mode        . ,(ts-fold-parsers-javascript))
-    (js3-mode        . ,(ts-fold-parsers-javascript))
-    (json-mode       . ,(ts-fold-parsers-json))
-    (jsonc-mode      . ,(ts-fold-parsers-json))
-    (nix-mode        . ,(ts-fold-parsers-nix))
-    (php-mode        . ,(ts-fold-parsers-php))
-    (python-mode     . ,(ts-fold-parsers-python))
-    (rjsx-mode       . ,(ts-fold-parsers-javascript))
-    (ruby-mode       . ,(ts-fold-parsers-ruby))
-    (rust-mode       . ,(ts-fold-parsers-rust))
-    (rustic-mode     . ,(ts-fold-parsers-rust))
-    (scala-mode      . ,(ts-fold-parsers-scala))
-    (swift-mode      . ,(ts-fold-parsers-swift))
-    (typescript-mode . ,(ts-fold-parsers-typescript)))
-  "An alist of (major-mode . (foldable-node-type . function)).
+  ;; `((agda-mode       . ,(ts-fold-parsers-agda))
+  ;;   (sh-mode         . ,(ts-fold-parsers-bash))
+  ;;   (c-mode          . ,(ts-fold-parsers-c))
+  ;;   (c++-mode        . ,(ts-fold-parsers-c++))
+  ;;   (csharp-mode     . ,(ts-fold-parsers-csharp))
+  ;;   (css-mode        . ,(ts-fold-parsers-css))
+  ;;   (ess-r-mode      . ,(ts-fold-parsers-r))
+  ;;   (go-mode         . ,(ts-fold-parsers-go))
+  ;;   (html-mode       . ,(ts-fold-parsers-html))
+  ;;   (java-mode       . ,(ts-fold-parsers-java))
+  ;;   (javascript-mode . ,(ts-fold-parsers-javascript))
+  ;;   (js-mode         . ,(ts-fold-parsers-javascript))
+  ;;   (js2-mode        . ,(ts-fold-parsers-javascript))
+  ;;   (js3-mode        . ,(ts-fold-parsers-javascript))
+  ;;   (json-mode       . ,(ts-fold-parsers-json))
+  ;;   (jsonc-mode      . ,(ts-fold-parsers-json))
+  ;;   (nix-mode        . ,(ts-fold-parsers-nix))
+  ;;   (php-mode        . ,(ts-fold-parsers-php))
+  ;;   (python-mode     . ,(ts-fold-parsers-python))
+  ;;   (rjsx-mode       . ,(ts-fold-parsers-javascript))
+  ;;   (ruby-mode       . ,(ts-fold-parsers-ruby))
+  ;;   (rust-mode       . ,(ts-fold-parsers-rust))
+  ;;   (rustic-mode     . ,(ts-fold-parsers-rust))
+  ;;   (scala-mode      . ,(ts-fold-parsers-scala))
+  ;;   (swift-mode      . ,(ts-fold-parsers-swift))
+  ;;   (typescript-mode . ,(ts-fold-parsers-typescript)))
+  `((java-mode       . ,ts-fold-queries-java))
+  "An alist of (major-mode . (tree-sitter-query . function)).
 
 FUNCTION is used to determine where the beginning and end for FOLDABLE-NODE-TYPE
 in MAJOR-MODE.  It should take a single argument (the syntax node with type
 FOLDABLE-NODE-TYPE) and return the buffer positions of the beginning and end of
 the fold in a cons cell.  See `ts-fold-range-python' for an example."
-  :type '(alist :key-type symbol
-                :value-type (alist :key-type symbol :value-type function))
+  :type '(alist :key-type symbol :value-type (alist :key-type symbol :value-type alist))
   :set (lambda (symbol value)
-         (set-default symbol value)
-         (setq ts-fold-foldable-node-alist
-               (let (alist)
-                 (dolist (item ts-fold-range-alist)
-                   (let ((mode (car item)) nodes)
-                     (dolist (rule (cdr item)) (push (car rule) nodes))
-                     (push (cons mode nodes) alist)))
-                 alist)))
+         (set-default symbol value))
   :group 'ts-fold)
 
 (defcustom ts-fold-mode-hook nil
@@ -162,16 +153,96 @@ the fold in a cons cell.  See `ts-fold-range-python' for an example."
   (let ((tree-sitter-mode t))
     (ts-fold-open-all)))
 
-;;;###autoload
-(define-minor-mode ts-fold-mode
-  "Folding code using tree sitter."
-  :init-value nil
-  :lighter "TS-Fold"
-  (if ts-fold-mode (ts-fold--enable) (ts-fold--disable)))
+(defun ts-fold--invalidate (&optional old-tree)
+  "Recalculate fold ranges after a text change.
+Installed on `tree-sitter-after-change-functions'.
+OLD-TREE is the tree before the edit."
+  (when (or (hash-table-empty-p ts-fold--fold-ranges)
+            (not (and old-tree (zerop (length (tsc-changed-ranges old-tree tree-sitter-tree))))))
+    (let* ((root-node (tsc-root-node tree-sitter-tree))
+           (matches (tsc-query-matches ts-fold--query root-node #'tsc--buffer-substring-no-properties ts-fold--query-cursor)))
+      (clrhash ts-fold--fold-ranges)
+      (mapc (lambda (match) (ts-fold--match-to-fold-range match ts-fold--patterns-to-handlers-alist ts-fold--fold-ranges)) matches)))
+  ts-fold--fold-ranges)
+
+(defvar-local ts-fold--default-patterns nil
+  "Default code folding patterns.
+This should be set by major modes that want to integrate with `ts-fold'.
+It is either a string, or a vector of S-expressions. For more details on the
+syntax, see https://emacs-tree-sitter.github.io/syntax-highlighting/queries/.")
+
+(defvar ts-fold--patterns-to-handlers-alist nil
+  "Additional language-specific code folding patterns, keyed by language symbol.")
+(put 'ts-fold--patterns-to-handlers-alist 'risky-local-variable t)
+
+(defvar-local ts-fold--extra-patterns-list nil
+  "Additional buffer-local vode folding patterns.")
+
+(defvar-local ts-fold--query nil
+  "Tree query used for code folding, compiled from patterns.")
+
+(defvar-local ts-fold--query-cursor nil)
+
+(defvar-local ts-fold--patterns-to-handlers-alist nil
+  "A map of fold patterns to their handler functions for the current buffer.
+Handler functions should take the arguments (beg end offset),
+where beg and end are numeric character offsets in the buffer,
+and offset is a pair (start-offset end-offset) which determines
+how much to offset the start and end of the fold.")
+
+(defun ts-fold--ensure-query ()
+  "Return the tree query to be used for syntax highlighting in this buffer."
+  (unless ts-fold--query
+    (setq ts-fold--query
+          (when ts-fold--default-patterns
+            (tsc-make-query
+             tree-sitter-language
+             (mapconcat #'tsc--stringify-patterns
+                        (append ts-fold--extra-patterns-list
+                                (alist-get (tsc--lang-symbol tree-sitter-language)
+                                           ts-fold--patterns-to-handlers-alist)
+                                (list ts-fold--default-patterns))
+                        "\n")))))
+  ts-fold--query)
+
+(defun ts-fold--setup ()
+  "Set up `ts-fold' in the current buffer.
+This assumes `tree-sitter-mode' was already enabled."
+  (setq ts-fold--patterns-to-handlers-alist (alist-get major-mode ts-fold-range-alist))
+  (setq ts-fold--default-patterns (mapcar #'car ts-fold--patterns-to-handlers-alist))
+  (setq ts-fold--fold-ranges (make-hash-table :test 'equal))
+  (when (ts-fold--ensure-query)
+    (unless ts-fold--query-cursor
+      (setq ts-fold--query-cursor (tsc-make-query-cursor))
+      ;; Invalidate the buffer, only if we were actually disabled previously.
+      (ts-fold--invalidate))
+    (add-hook 'tree-sitter-after-change-functions #'ts-fold--invalidate nil :local)))
+
+(defun ts-fold--teardown ()
+  "Tear down `ts-fold' in the current buffer."
+  (remove-hook 'tree-sitter-after-change-functions
+               #'ts-fold--invalidate
+               :local)
+  (when ts-fold--query-cursor
+    ;; Open all folds only if we're enabled
+    (ts-fold-open-all)
+    (setq ts-fold--query-cursor nil))
+  (when ts-fold--query
+    (setq ts-fold--query nil))
+  (when ts-fold--fold-ranges
+    (setq ts-fold--fold-ranges nil)))
 
 ;;;###autoload
-(define-global-minor-mode global-ts-fold-mode ts-fold-mode
-  (lambda () (ts-fold-mode 1)))
+(define-minor-mode ts-fold-mode
+  "Toggle code folding based on Tree-sitter's syntax tree.
+Enabling this automatically enables `tree-sitter-mode' in the buffer.
+To enable this automatically whenever `tree-sitter-mode' is enabled:
+ (add-hook 'tree-sitter-after-on-hook #'ts-fold-mode)"
+  :init-value nil
+  :group 'tree-sitter
+  (tree-sitter--handle-dependent ts-fold-mode
+    #'ts-fold--setup
+    #'ts-fold--teardown))
 
 ;;
 ;; (@* "Core" )
@@ -183,25 +254,47 @@ the fold in a cons cell.  See `ts-fold-range-python' for an example."
 Raise `user-error' if no foldable node is found.
 
 This function is borrowed from `tree-sitter-node-at-point'."
-  (let* ((pos (or pos (point)))
-         (foldable-types (alist-get major-mode ts-fold-foldable-node-alist))
-         (root (tsc-root-node tree-sitter-tree))
-         (node (tsc-get-descendant-for-position-range root pos pos)))
-    (let ((current node) result)
-      (while current
-        (if (memq (tsc-node-type current) foldable-types)
-            (setq result current
-                  current nil)
-          (setq current (tsc-get-parent current))))
-      (or result (user-error "No foldable node found at POS")))))
+  (tree-sitter-node-at-pos nil pos))
+
+(defvar-local ts-fold--fold-ranges nil)
+
+(defun ts-fold--match-to-fold-range (match fold-alist ranges-table)
+  "For a single MATCH, return an alist mapping all nodes in it to the match range and the action to perform, pulled from FOLD-ALIST."
+  (let* ((idx (car match)) ;; Which part of the query this match corresponds to we've got (numbered from 0)
+         (nodes (cdr match)) ;; All nodes covered by the match
+         (fold-nodes (seq-filter (lambda (el) (eq 'fold (car el))) nodes)) ;; All captures from the match annotated with @fold
+         (first-node (cdr (elt fold-nodes 0))) ;; The first node in the match
+         (last-node (cdr (elt fold-nodes (1- (length fold-nodes)))))) ;; The last node in the match
+    ;; An alist of all matched nodes to the larger match they're a part of, in the form:
+    ;;   ((node . (start end fold-action))
+    (mapcar
+     (lambda (node)
+       (puthash
+        (ts-fold--node-to-alist-key (cdr node))
+        (list (tsc-node-start-position first-node) (tsc-node-end-position last-node) (cdr (elt fold-alist idx)))
+        ranges-table))
+     nodes)))
+
+(defun ts-fold--get-fold-ranges ()
+  "Return all fold ranges in the document."
+  ts-fold--fold-ranges)
+
+(defun ts-fold--node-to-alist-key (node)
+  "Create an interned symbol encoding a node's information for quicker lookup"
+  (list (tsc-node-type node) (tsc-node-start-byte node) (tsc-node-end-byte node)))
 
 (defun ts-fold--get-fold-range (node)
   "Return the beginning (as buffer position) of fold for NODE."
-  (when-let* ((fold-alist (alist-get major-mode ts-fold-range-alist))
-              (item (alist-get (tsc-node-type node) fold-alist)))
-    (cond ((functionp item) (funcall item node (cons 0 0)))
-          ((listp item) (funcall (nth 0 item) node (cons (nth 1 item) (nth 2 item))))
-          (t (user-error "Current node is not found in `ts-fold-range-alist' in %s" major-mode)))))
+  (if-let* ((node node)
+            (range-info (gethash (ts-fold--node-to-alist-key node) (ts-fold--get-fold-ranges)))
+            (start (nth 0 range-info))
+            (end (nth 1 range-info))
+            (handler (nth 2 range-info)))
+      (cond ((functionp handler) (funcall handler start end (cons 0 0)))
+            ((listp handler) (funcall (nth 0 handler) start end (cons (nth 1 handler) (nth 2 handler))))
+            (t (user-error "Invalid handler %S for node %S `ts-fold-range-alist' in %s" handler node major-mode)))
+    (when-let* ((parent (tsc-get-parent node)))
+      (ts-fold--get-fold-range parent))))
 
 ;;
 ;; (@* "Overlays" )
@@ -226,15 +319,13 @@ This function is borrowed from `tree-sitter-node-at-point'."
 (defun ts-fold-overlay-at (node)
   "Return the ts-fold overlay at NODE if NODE is foldable and folded.
 Return nil otherwise."
-  (when-let* ((foldable-types (alist-get major-mode ts-fold-foldable-node-alist))
-              ((memq (tsc-node-type node) foldable-types))
-              (range (ts-fold--get-fold-range node)))
+  (when-let* ((range (ts-fold--get-fold-range node)))
     (thread-last (overlays-in (car range) (cdr range))
-      (seq-filter (lambda (ov)
-                    (and (eq (overlay-get ov 'invisible) 'ts-fold)
-                         (= (overlay-start ov) (car range))
-                         (= (overlay-end ov) (cdr range)))))
-      car)))
+                 (seq-filter (lambda (ov)
+                               (and (eq (overlay-get ov 'invisible) 'ts-fold)
+                                    (= (overlay-start ov) (car range))
+                                    (= (overlay-end ov) (cdr range)))))
+                 car)))
 
 ;;
 ;; (@* "Commands" )
@@ -245,7 +336,7 @@ Return nil otherwise."
   (declare (indent 0))
   `(if (bound-and-true-p tree-sitter-mode)
        (progn ,@body)
-     (user-error "Ignored, tree-sitter-mode is not enable in the current buffer")))
+     (user-error "Ignored, tree-sitter-mode is not enabled in the current buffer")))
 
 ;;;###autoload
 (defun ts-fold-close (&optional node)
@@ -280,8 +371,8 @@ If the current node is not folded or not foldable, do nothing."
                 (beg (tsc-node-start-position node))
                 (end (tsc-node-end-position node)))
       (thread-last (overlays-in beg end)
-        (seq-filter (lambda (ov) (eq (overlay-get ov 'invisible) 'ts-fold)))
-        (mapc #'delete-overlay)))))
+                   (seq-filter (lambda (ov) (eq (overlay-get ov 'invisible) 'ts-fold)))
+                   (mapc #'delete-overlay)))))
 
 ;;;###autoload
 (defun ts-fold-close-all ()
@@ -295,8 +386,8 @@ If the current node is not folded or not foldable, do nothing."
            (query (tsc-make-query tree-sitter-language patterns))
            (nodes-to-fold (tsc-query-captures query node #'ignore)))
       (thread-last nodes-to-fold
-        (mapcar #'cdr)
-        (mapc #'ts-fold-close)))))
+                   (mapcar #'cdr)
+                   (mapc #'ts-fold-close)))))
 
 ;;;###autoload
 (defun ts-fold-open-all ()
@@ -304,8 +395,8 @@ If the current node is not folded or not foldable, do nothing."
   (interactive)
   (ts-fold--ensure-ts
     (thread-last (overlays-in (point-min) (point-max))
-      (seq-filter (lambda (ov) (eq (overlay-get ov 'invisible) 'ts-fold)))
-      (mapc #'delete-overlay))))
+                 (seq-filter (lambda (ov) (eq (overlay-get ov 'invisible) 'ts-fold)))
+                 (mapc #'delete-overlay))))
 
 ;;;###autoload
 (defun ts-fold-toggle ()
@@ -363,15 +454,15 @@ in backward direction."
       (setq iter-node (ts-fold--next-prev-node iter-node next)))
     last-node))
 
-(defun ts-fold-range-seq (node offset)
+(defun ts-fold-range-seq (beg end offset)
   "Return the fold range in sequence starting from NODE.
 
 Argument OFFSET can be used to tweak the final beginning and end position."
-  (let ((beg (1+ (tsc-node-start-position node)))
-        (end (1- (tsc-node-end-position node))))
+  (let ((beg (1+ beg))
+        (end (1- end)))
     (ts-fold-util--cons-add (cons beg end) offset)))
 
-(defun ts-fold-range-line-comment (node offset prefix)
+(defun ts-fold-range-line-comment (beg end offset prefix)
   "Define fold range for line comment.
 
 For arguments NODE and OFFSET, see function `ts-fold-range-seq' for
@@ -381,11 +472,10 @@ Argument PREFIX is the comment prefix in string."
   (when-let* ((first-node (ts-fold--continuous-node-prefix node prefix nil))
               (last-node (ts-fold--continuous-node-prefix node prefix t))
               (prefix-len (length prefix))
-              (beg (+ (tsc-node-start-position first-node) prefix-len))
-              (end (tsc-node-end-position last-node)))
+              (beg (+ beg prefix-len)))
     (ts-fold-util--cons-add (cons beg end) offset)))
 
-(defun ts-fold-range-block-comment (node offset)
+(defun ts-fold-range-block-comment (beg end offset)
   "Define fold range for block comment.
 
 For arguments NODE and OFFSET, see function `ts-fold-range-seq' for
